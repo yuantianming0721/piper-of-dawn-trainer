@@ -1,0 +1,11 @@
+# 构建产物
+源码/build/
+源码/obj/
+源码/bin/
+*.user
+*.suo
+
+# 本地 / 临时
+.vs/
+.idea/
+_*.py
