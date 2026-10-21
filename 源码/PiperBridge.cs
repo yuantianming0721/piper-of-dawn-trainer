@@ -63,13 +63,13 @@ public static class PiperBridge
     }
 
     // ---------- IL2CPP 原生反射：读真实静态字段（托管反射看不到它们） ----------
-    private static Piper.rl _forced;
+    private static Il2CppSystem.Object _forced;
     private static bool _il2swept;
 
-    public static Piper.rl Forced => _forced;
+    public static Il2CppSystem.Object Forced => _forced;
     public static bool FoundRl => _forced != null;
 
-    public static void SetLiveRl(Piper.rl r)
+    public static void SetLiveRl(Il2CppSystem.Object r)
     {
         if (r == null || _forced == r) return;
         _forced = r;
@@ -84,35 +84,9 @@ public static class PiperBridge
         if (_sweepTries > 20) return "放弃（多次未找到）";
         _sweepTries++;
         var sb = new System.Text.StringBuilder("rl:");
-        try
-        {
-            var t = Il2CppInterop.Runtime.Il2CppType.Of<Piper.rl>();
-            var flags = Il2CppSystem.Reflection.BindingFlags.Static
-                      | Il2CppSystem.Reflection.BindingFlags.Public
-                      | Il2CppSystem.Reflection.BindingFlags.NonPublic;
-            var fs = t.GetFields(flags);
-            sb.Append("字段数=").Append(fs == null ? -1 : fs.Length);
-            if (fs != null)
-            {
-                for (int i = 0; i < fs.Length; i++)
-                {
-                    var f = fs[i];
-                    try
-                    {
-                        var v = f.GetValue(null);
-                        string d = v == null ? "null" : v.ToString();
-                        RawLog("IL2SWEEP rl." + f.Name + " => " + d);
-                        if (v != null && _forced == null)
-                        {
-                            var r = v.TryCast<Piper.rl>();
-                            if (r != null) { _forced = r; sb.Append(" <<FOUND"); }
-                        }
-                    }
-                    catch (Exception fe) { RawLog("IL2SWEEP rl." + f.Name + " ERR " + fe.Message); }
-                }
-            }
-        }
-        catch (Exception e) { RawLog("IL2SWEEP outer ERR " + e.Message); }
+        // v4.17.5：游戏更新后混淆类型名整体变化（旧 Piper.rl 已不存在），
+        // 这里不再按编译期类型名扫描静态字段；实例由 SaveAllStaffData 钩子直接捕获。
+        sb.Append("类型名随版本变化，跳过静态字段扫描");
 
         try
         {
@@ -571,7 +545,8 @@ public static class PiperBridge
         _bldTableTried = true;
         try
         {
-            var asm = typeof(Piper.rl).Assembly;
+            // v4.17.5：用未混淆类型取 Assembly-CSharp（旧 Piper.rl 已随版本改名）
+            var asm = typeof(SaveLoadSystem.AllStaffData).Assembly;
             // 链路1：学习版 fl
             var flT = asm.GetType("fl");
             if (flT != null)
@@ -946,8 +921,9 @@ public static class PiperBridge
     private static void ProbeRuntimeReachable()
     {
         // v4.13.1：buo/bjg/bsi 类在 Steam 构建整类改名，typeof 直连即地雷，全部移除
-        Type[] probeTypes = { typeof(global::ev), typeof(Piper.rl) };
-        string[] names = { "ev(图鉴配置)", "rl(总管理)" };
+        // v4.17.5：rl 总管理类也随版本改名，不再参与探测（实例由 SaveAllStaffData 钩子捕获）
+        Type[] probeTypes = { typeof(global::ev) };
+        string[] names = { "ev(图鉴配置)" };
         for (int i = 0; i < probeTypes.Length; i++)
         {
             try
@@ -965,13 +941,21 @@ public static class PiperBridge
 
     private static void DumpIllustrationConfigs(Il2CppSystem.Collections.Generic.List<Example.IllustrationConfig> list, int max)
     {
+        // v4.17.5：游戏更新后字段名变化（旧 bnlg/bnlh/bnll/bnli/bnlj → 新 bnzm/bnzn/bnzr/bnzo/bnzp），
+        // 这里改走反射，兼容两套命名；探测失败不影响主功能。
         for (int i = 0; i < list.Count && i < max; i++)
         {
             var c = list[i];
             if (c == null) continue;
             var sb = new System.Text.StringBuilder();
-            sb.Append($"bnlg={c.bnlg} bnlh={c.bnlh} bnll={c.bnll} str=[bnli='{c.bnli}'] condList=({(c.bnlj == null ? -1 : c.bnlj.Count)})");
-            foreach (var kv in new[] { ("bnlg", c.bnlg), ("bnlh", c.bnlh), ("bnll", c.bnll) })
+            int a = RInt(c, "bnlg"); if (a == 0) a = RInt(c, "bnzm");
+            int b = RInt(c, "bnlh"); if (b == 0) b = RInt(c, "bnzn");
+            int d = RInt(c, "bnll"); if (d == 0) d = RInt(c, "bnzr");
+            object so = RProp(c, "bnli") ?? RProp(c, "bnzo");
+            object lst = RProp(c, "bnlj") ?? RProp(c, "bnzp");
+            int cnt = -1; try { if (lst != null) cnt = Convert.ToInt32(RProp(lst, "Count")); } catch { }
+            sb.Append($"a={a} b={b} d={d} str=[{(so as string ?? "")}] condList=({cnt})");
+            foreach (var kv in new[] { ("a", a), ("b", b), ("d", d) })
             {
                 if (kv.Item2 <= 0) continue;
                 var s = PiperNames.ResolveText(kv.Item2);

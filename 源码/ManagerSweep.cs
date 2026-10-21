@@ -11,8 +11,9 @@ namespace PiperTrainer;
 // il2cpp 原生反射可读到托管反射看不到的真实静态数据（已实测：SLM._instance ✓）
 public static class ManagerSweep
 {
-    public static Piper.rl Rl;
-    public static Piper.Staff.bbe StaffBbe;
+    // v4.17.5：旧混淆类型 Piper.rl / Piper.Staff.bbe 已随游戏更新改名，
+    // 这里只保留 object 引用，避免插件因编译期类型不存在而抛 TypeLoadException。
+    public static Il2CppSystem.Object Rl;
     public static SaveLoadSystem.SaveLoadManager Slm;
 
     public static int Scanned;
@@ -29,9 +30,4 @@ public static class ManagerSweep
     }
 
     private static string Trunc(string s, int n) => string.IsNullOrEmpty(s) ? "" : (s.Length <= n ? s : s.Substring(0, n));
-
-    private static Piper.rl TryCastPiperRl(Il2CppSystem.Object o)
-    {
-        try { return o.TryCast<Piper.rl>(); } catch { return null; }
-    }
 }

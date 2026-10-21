@@ -280,7 +280,8 @@ public static class DebugDriver
     {
         try
         {
-            var t = typeof(Piper.rl).Assembly.GetType("Piper.ThePiper");
+            // v4.17.5：用未混淆类型取 Assembly-CSharp（旧 Piper.rl 已随版本改名）
+            var t = typeof(SaveLoadSystem.AllStaffData).Assembly.GetType("Piper.ThePiper");
             if (t == null) { miss = "类型 Piper.ThePiper 不存在"; return false; }
             var it = Il2CppSystem.Type.GetType(t.FullName + ", Assembly-CSharp");
             if (it == null) { miss = "il2cpp 类型解析失败"; return false; }

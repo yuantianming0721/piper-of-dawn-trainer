@@ -45,7 +45,7 @@ public static class StaffLive
     private static string _curProp, _maxProp, _tsProp;
     private static string _tsEpoch;
     private static bool _scaledCur, _scaledMax;      // 实体值×1000==存档值（毫单位换算）
-    private static long _epochSample1; private static float _epochAt1 = -1f; private static bool _epochDone;
+    private static long _epochSample1; private static float _epochAt1 = -1f; private static bool _epochDone; private static int _epochTries;
 
     private static readonly Dictionary<string, int> _maxVotes = new Dictionary<string, int>();
     private static readonly Dictionary<string, int> _maxScaled = new Dictionary<string, int>();
@@ -417,14 +417,24 @@ public static class StaffLive
             if (_epochAt1 < 0)
             {
                 if (_pairs.Count == 0) return;
-                _epochSample1 = ReadLong(_pairs[0].Ent, _tsProp);
+                // v4.17.5：采样全员最大值，避免恰好抽到空闲员工（其时间戳不动 → 误判"静止"）
+                _epochSample1 = MaxTs();
                 _epochAt1 = now;
             }
             else if (now - _epochAt1 > 3f)
             {
                 if (_pairs.Count == 0) { _epochDone = true; return; }
-                long t2 = ReadLong(_pairs[0].Ent, _tsProp);
-                double perMs = (t2 - _epochSample1) / 3000.0;
+                long t2 = MaxTs();
+                long delta = t2 - _epochSample1;
+                if (delta == 0 && _epochTries < 5)
+                {
+                    // 这 3 秒里没有任何员工刷新时间戳（全员空闲/暂停），重试而不是直接判"静止"
+                    _epochTries++;
+                    _epochSample1 = t2;
+                    _epochAt1 = now;
+                    return;
+                }
+                double perMs = delta / 3000.0;
                 // 每毫秒增量经验值：.NET ticks≈10000 / unix毫秒≈1 / 游戏60Hz时钟≈0.06 / unix秒≈0.001
                 if (perMs >= 3000) _tsEpoch = "ticks";
                 else if (perMs >= 0.3 && perMs <= 3) _tsEpoch = "unixms";
@@ -443,6 +453,19 @@ public static class StaffLive
             }
         }
         catch { _epochDone = true; }
+    }
+
+    // 全员时间戳最大值 ≈ 游戏当前帧（正在工作的员工每帧刷新它）
+    private static long MaxTs()
+    {
+        long mx = 0;
+        foreach (var pr in _pairs)
+        {
+            if (pr.Ent == null) continue;
+            long v = ReadLong(pr.Ent, _tsProp);
+            if (v > mx) mx = v;
+        }
+        return mx;
     }
 
     // 兜底枚举：管理器属性里的集合元素（KVP 拆 Value），带完整日志
@@ -657,6 +680,13 @@ public static class StaffLive
                 if (v > mx) mx = v;
             }
             if (mx > 0) _tsNowTick = mx;
+            // v4.17.5：纪元判定要等 3 秒采样窗口；玩家在窗口结束前点回满时，
+            // 用数值量级兜底：<1e9 不可能是 unix 秒(≈1.79e9)/毫秒/.NET ticks，只可能是游戏帧计数。
+            if (_tsEpoch == null && !_epochDone && _tsNowTick > 0 && _tsNowTick < 1000000000L)
+            {
+                _tsEpoch = "gameticks";
+                RawLog("STAFFLIVE 时间戳纪元: 游戏时钟tick(量级兜底，回满时同步当前帧) now=" + _tsNowTick);
+            }
         }
         catch { }
     }

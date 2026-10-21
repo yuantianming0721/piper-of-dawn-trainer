@@ -12,7 +12,7 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <GameDir>E:\amei\The Piper Of Dawn</GameDir>
+    <GameDir>E:\SteamLibrary\steamapps\common\The Piper Of Dawn</GameDir>
     <BepInExCore>$(GameDir)\BepInEx\core</BepInExCore>
     <BepInExInterop>$(GameDir)\BepInEx\interop</BepInExInterop>
   </PropertyGroup>
@@ -25,6 +25,7 @@
     <Reference Include="Il2Cppmscorlib"><HintPath>$(BepInExInterop)\Il2Cppmscorlib.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Assembly-CSharp"><HintPath>$(BepInExInterop)\Assembly-CSharp.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.CoreModule"><HintPath>$(BepInExInterop)\UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.ScreenCaptureModule"><HintPath>$(BepInExInterop)\UnityEngine.ScreenCaptureModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.IMGUIModule"><HintPath>$(BepInExInterop)\UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.InputLegacyModule"><HintPath>$(BepInExInterop)\UnityEngine.InputLegacyModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Unity.TextMeshPro"><HintPath>$(BepInExInterop)\Unity.TextMeshPro.dll</HintPath><Private>false</Private></Reference>
