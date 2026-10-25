@@ -113,21 +113,46 @@ public static class PiperNames
         catch { return null; }
     }
 
-    private static MethodInfo _euaMi;
+    private static MethodInfo[] _textMis;
+    private static int _textBest = -1;
 
-    // bs.eua(Int32) —— 全文本解析器（实测：eua(10031)='茜茜'）
+    // 文本解析器：旧版 bs.eua(Int32)；2026-10-21 新版改为 bs.evb / bs.evc(Int32)。
+    // 三个都试，取第一个返回非空的方法并缓存。
+    private static MethodInfo[] TextMethods()
+    {
+        if (_textMis != null) return _textMis;
+        try
+        {
+            var bsT = typeof(Example.UnitConfig).Assembly.GetType("bs");
+            if (bsT == null) return _textMis = new MethodInfo[0];
+            var list = new System.Collections.Generic.List<MethodInfo>();
+            foreach (var name in new[] { "eua", "evb", "evc" })
+            {
+                var m = bsT.GetMethod(name, BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(int) }, null);
+                if (m != null) list.Add(m);
+            }
+            return _textMis = list.ToArray();
+        }
+        catch { return _textMis = new MethodInfo[0]; }
+    }
+
     public static string ResolveText(int id)
     {
         try
         {
-            if (_euaMi == null)
+            var ms = TextMethods();
+            if (ms.Length == 0) return null;
+            if (_textBest >= 0 && _textBest < ms.Length)
             {
-                var bsT = typeof(Example.UnitConfig).Assembly.GetType("bs");
-                if (bsT == null) return null;
-                _euaMi = bsT.GetMethod("eua", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(int) }, null);
+                var s0 = ms[_textBest].Invoke(null, new object[] { id }) as string;
+                if (!string.IsNullOrEmpty(s0)) return s0;
             }
-            if (_euaMi == null) return null;
-            return _euaMi.Invoke(null, new object[] { id }) as string;
+            for (int i = 0; i < ms.Length; i++)
+            {
+                var s = ms[i].Invoke(null, new object[] { id }) as string;
+                if (!string.IsNullOrEmpty(s)) { _textBest = i; return s; }
+            }
+            return null;
         }
         catch { return null; }
     }

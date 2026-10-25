@@ -547,6 +547,15 @@ public static class PiperBridge
         {
             // v4.17.5：用未混淆类型取 Assembly-CSharp（旧 Piper.rl 已随版本改名）
             var asm = typeof(SaveLoadSystem.AllStaffData).Assembly;
+            // 链路0（2026-10-21 新版）：fn.get_bmzt / fn.fxa() → Example.jz.bnqv
+            var fnT0 = asm.GetType("fn");
+            if (fnT0 != null)
+            {
+                object holder0 = RPropStatic(fnT0, "bmzt");
+                if (holder0 == null) holder0 = RCallStatic(fnT0, "fxa");
+                var table0 = holder0 == null ? null : RProp(holder0, "bnqv");
+                if (table0 != null) { _bldTableCache = table0; return table0; }
+            }
             // 链路1：学习版 fl
             var flT = asm.GetType("fl");
             if (flT != null)
@@ -577,9 +586,23 @@ public static class PiperBridge
     }
 
     // 跨构建字段名候选（按上面的链路顺序对应）
-    private static int BldId(object cfg) { int v = RInt(cfg, "bnbm"); return v > 0 ? v : RInt(cfg, "bnlr"); }
+    private static int BldId(object cfg)
+    {
+        int v = RInt(cfg, "bnqb");                 // 2026-10-21 新版
+        if (v > 0) return v;
+        v = RInt(cfg, "bnbm"); if (v > 0) return v; // 学习版
+        return RInt(cfg, "bnlr");                   // 旧 Steam 版
+    }
     private static string BldName(object cfg)
     {
+        // 2026-10-21 新版：名称变成文本 ID（bnqc），用游戏文本解析器取中文名
+        int tid = RInt(cfg, "bnqc");
+        if (tid > 0)
+        {
+            var t = PiperNames.ResolveText(tid);
+            if (!string.IsNullOrEmpty(t)) return t;
+        }
+        // 旧版：名称就是字符串字段
         var s = RProp(cfg, "bnbo") as string;
         if (string.IsNullOrEmpty(s)) s = RProp(cfg, "bnlt") as string;
         return s;
@@ -773,7 +796,8 @@ public static class PiperBridge
                 for (int i = 0; i < fin.Count; i++) if (fin[i] == id) { has = true; break; }
                 if (!has) { fin.Add(id); added++; }
             }
-            for (int id = 7100; id <= 7199; id++)
+            // v4.17.6：新版图鉴 ID 已用到 72xx（实测 ForceFinished 含 7225-7229），强制段扩到 7299
+            for (int id = 7100; id <= 7299; id++)
             {
                 bool has = false;
                 for (int i = 0; i < force.Count; i++) if (force[i] == id) { has = true; break; }
@@ -850,6 +874,11 @@ public static class PiperBridge
         if (list == null) { RawLog("PROBE2 BuildingConfig 表不可达（此构建符号不匹配）"); return; }
         int total = RCount(list);
         RawLog("PROBE2 BuildingConfig 共" + total + " 条");
+        for (int i = 0; i < total && i < 3; i++)
+        {
+            var c0 = RAt(list, i);
+            RawLog("PROBE2 BLDNAME id=" + BldId(c0) + " name='" + BldName(c0) + "'");
+        }
         for (int i = 0; i < total && i < 20; i++)
             DumpOneBuilding(RAt(list, i));
         int dumped = 0;
@@ -869,9 +898,10 @@ public static class PiperBridge
         try
         {
             var sb = new System.Text.StringBuilder();
-            string[] intFields = { "bnbm", "bnbn", "bnbs", "bnbv", "bnbw", "bnce", "bncf", "bnlr", "bnls", "bnlx", "bnma", "bnmb", "bnmj", "bnmk" };
+            string[] intFields = { "bnqb", "bnqc", "bnqg", "bnqj", "bnqk", "bnqs", "bnqt",
+                                   "bnbm", "bnbn", "bnbs", "bnbv", "bnbw", "bnce", "bncf", "bnlr", "bnls", "bnlx", "bnma", "bnmb", "bnmj", "bnmk" };
             foreach (var f in intFields) { int v = RInt(c, f); if (v != 0) sb.Append(f).Append('=').Append(v).Append(' '); }
-            foreach (var f in new[] { "bnbo", "bncc", "bncd", "bnlt", "bnmh", "bnmi" })
+            foreach (var f in new[] { "bnqq", "bnqr", "bnbo", "bncc", "bncd", "bnlt", "bnmh", "bnmi" })
             {
                 var sv = RProp(c, f) as string;
                 if (!string.IsNullOrEmpty(sv)) sb.Append(f).Append("='").Append(sv).Append("' ");
