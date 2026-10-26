@@ -9,7 +9,7 @@ using UnityEngine;
 
 namespace PiperTrainer;
 
-[BepInPlugin("local.coldbrew.piper.trainer", "吹笛人内置修改器 (IL2CPP)", "4.17.6")]
+[BepInPlugin("local.coldbrew.piper.trainer", "吹笛人内置修改器 (IL2CPP)", "4.17.7")]
 public class PiperTrainerPlugin : BasePlugin
 {
     public static PiperTrainerPlugin Instance;
@@ -31,6 +31,7 @@ public class PiperTrainerPlugin : BasePlugin
         try { DebugDriver.TargetSaveSlot = Config.Bind("调试", "读档目标存档号", 0, "开发调试用：>0 时侦察命中该存档号后自动确认读取（如 9=读存档9）").Value; } catch { }
         try { StaffLive.VerifyOnce = Config.Bind("调试", "自动回满验证一次", false, "开发调试用：锁定字段后自动执行一次全员回满并回读校验").Value; } catch { }
         try { StaffLive.InsanitySelfTest = Config.Bind("调试", "失智复位自测", false, "开发调试用：随机取一名员工置为失智再执行复位自测").Value; } catch { }
+        try { PiperBridge.FeedbackSelfTest = Config.Bind("调试", "玩家反馈自测", false, "开发调试用：加钱/加好感/加种子各一次并回读校验").Value; } catch { }
         try { DebugCapture.Enabled = Config.Bind("调试", "截图巡检", false, "开发调试用：自动开菜单逐页签截图（含员工页回满前后对比）").Value; } catch { }
         try { DebugCapture.Dir = Config.Bind("调试", "截图目录", "", "截图巡检输出目录（正斜杠，如 E:/out/shots/）").Value; } catch { }
 
@@ -47,7 +48,7 @@ public class PiperTrainerPlugin : BasePlugin
         Log.LogInfo("PiperTrainer (IL2CPP) 已加载，按 Home 打开菜单");
     }
 
-    public const string Ver = "4.17.6";
+    public const string Ver = "4.17.7";
 
     public static int HotkeyCode => Instance == null || Instance._hotkey == null ? (int)KeyCode.Home : Instance._hotkey.Value;
     public static void Toggle() => _show = !_show;

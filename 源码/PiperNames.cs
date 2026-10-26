@@ -100,6 +100,75 @@ public static class PiperNames
         catch { return null; }
     }
 
+    private static object StaticProp(Type t, string name)
+    {
+        if (t == null) return null;
+        try
+        {
+            var p = t.GetProperty(name, BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+            return p == null ? null : p.GetValue(null);
+        }
+        catch { return null; }
+    }
+
+    // v4.17.7：游戏更新后配置表持有类整体重排。新链：静态属性/方法 → 持有类 → 列表字段；
+    // 旧链：静态方法 → 实例方法 → 列表字段。只按运行时类型名解析，不引入编译期混淆类型。
+    private static object ConfigList(string newType, string newProp, string newMethod, string newField,
+                                     string oldType, string oldMethod1, string oldMethod2, string oldField)
+    {
+        try
+        {
+            var asm = typeof(Example.UnitConfig).Assembly;
+            var nt = asm.GetType(newType);
+            if (nt != null)
+            {
+                object nh = StaticProp(nt, newProp);
+                if (nh == null) nh = CallStatic(nt, newMethod);
+                var nl = nh == null ? null : Prop(nh, newField);
+                if (nl != null) return nl;
+            }
+            var ot = string.IsNullOrEmpty(oldType) ? null : asm.GetType(oldType);
+            if (ot != null)
+            {
+                var o1 = CallStatic(ot, oldMethod1);
+                var o2 = o1 == null ? null : CallOn(o1, oldMethod2);
+                var ol = o2 == null ? null : Prop(o2, oldField);
+                if (ol != null) return ol;
+            }
+        }
+        catch (Exception e) { PiperTrainerPlugin.Log2?.LogInfo("NAMES chain err " + e.Message); }
+        return null;
+    }
+
+    // 好感 NPC 配置表（供浏览器探针复用）
+    public static object FavorConfigList() =>
+        ConfigList("fy", "bnba", "fyh", "bnvp", "fw", "fws", "fwu", "bnhe");
+
+    // v4.17.7：好感等级换算（配置 bnut=npcID、bnuu=等级序列、bnuv=每级阈值）
+    public static int FavorLevel(int npcId, int value)
+    {
+        try
+        {
+            var list = FavorConfigList() as Il2CppSystem.Collections.Generic.List<Example.FavorNPCConfig>;
+            if (list == null) return -1;
+            for (int i = 0; i < list.Count; i++)
+            {
+                var c = list[i];
+                if (c == null) continue;
+                if (Convert.ToInt32(Prop(c, "bnut") ?? -1) != npcId) continue;
+                var lv = Prop(c, "bnuu") as Il2CppSystem.Collections.Generic.List<int>;
+                var th = Prop(c, "bnuv") as Il2CppSystem.Collections.Generic.List<int>;
+                if (th == null || th.Count == 0) return -1;
+                int best = -1;
+                for (int j = 0; j < th.Count; j++)
+                    if (value >= th[j]) best = (lv != null && j < lv.Count) ? lv[j] : j;
+                return best;
+            }
+        }
+        catch { }
+        return -1;
+    }
+
     private static object CallOnArg(object obj, string name, object arg)
     {
         if (obj == null) return null;
@@ -211,10 +280,8 @@ public static class PiperNames
     private static bool BuildTextTable()
     {
         if (Texts.Count > 0) return true;
-        var goInst = CallStatic(typeof(go), "fyu");
-        if (goInst == null) return false;
-        var mb = CallOn(goInst, "fyw");
-        var list = Prop(mb, "bnnt") as Il2CppSystem.Collections.Generic.List<Example.LanguageTalk>;
+        var list = ConfigList("gq", "bndc", "gaj", "bobz", "go", "fyu", "fyw", "bnnt")
+                   as Il2CppSystem.Collections.Generic.List<Example.LanguageTalk>;
         if (list == null || list.Count == 0) return false;
 
         // 探测 4 列中哪列是中文：抽样统计 CJK 占比
@@ -255,9 +322,8 @@ public static class PiperNames
     private static void LoadUnits()
     {
         if (_unitById.Count > 0) return;
-        var hvInst = CallStatic(typeof(hv), "gcp");
-        var ol = CallOn(hvInst, "gcr");
-        var ucList = Prop(ol, "bocn") as Il2CppSystem.Collections.Generic.List<Example.UnitConfig>;
+        var ucList = ConfigList("hy", "bnha", "geh", "boqx", "hv", "gcp", "gcr", "bocn")
+                     as Il2CppSystem.Collections.Generic.List<Example.UnitConfig>;
         if (ucList == null) return;
         for (int k = 0; k < ucList.Count; k++)
         {
@@ -280,9 +346,8 @@ public static class PiperNames
         LoadUnits();
         if (_unitById.Count == 0) return;
 
-        var fwInst = CallStatic(typeof(fw), "fws");
-        var kv = CallOn(fwInst, "fwu");
-        var list = Prop(kv, "bnhe") as Il2CppSystem.Collections.Generic.List<Example.FavorNPCConfig>;
+        var list = ConfigList("fy", "bnba", "fyh", "bnvp", "fw", "fws", "fwu", "bnhe")
+                   as Il2CppSystem.Collections.Generic.List<Example.FavorNPCConfig>;
         if (list == null) return;
 
         int built = 0;
@@ -318,9 +383,8 @@ public static class PiperNames
     private static void BuildItemNames()
     {
         BuildCategoryLabels();
-        var glInst = CallStatic(typeof(gl), "fyl");
-        var lt = CallOn(glInst, "fyn");
-        var list = Prop(lt, "bnmv") as Il2CppSystem.Collections.Generic.List<Example.ItemConfig>;
+        var list = ConfigList("gn", "bnct", "gaa", "bobb", "gl", "fyl", "fyn", "bnmv")
+                   as Il2CppSystem.Collections.Generic.List<Example.ItemConfig>;
         if (list == null) return;
 
         string[] intFields = { "bnmb", "bnmc", "bnmd", "bnmf", "bnmh", "bnmi", "bnmj", "bnmk", "bnml", "bnmm", "bnmr", "bnms", "bnmt" };

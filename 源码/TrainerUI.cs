@@ -228,12 +228,14 @@ public static class TrainerUI
                 RefreshMoney();
             }
             GUI.Label(new Rect(x, y, 300, 22), "【金币】" +
-                (_moneyKnown ? $"当前 {_moneyValue / 100.0:0.##}" : "未找到 901（导出诊断日志查属性表）"));
+                (_moneyKnown ? $"当前 {_moneyValue / 1000.0:N0}" : "未找到 901（导出诊断日志查属性表）"));
             y += 26;
+            // v4.17.7：raw = 金币×1000（游戏 HUD 实测 25552K ↔ raw 25552099317）；
+            // 加/减必须是"当前值 + 步长"，旧代码写成了绝对设值。
             if (GUI.Button(new Rect(x, y, 150, 30), $"加 {StepName(_step)}"))
-                Flash(PiperBridge.SetAttribute(901, _step * 100));
+                Flash(PiperBridge.SetAttribute(901, _moneyValue + (long)_step * 1000));
             if (GUI.Button(new Rect(x + 156, y, 150, 30), $"减 {StepName(_step)}"))
-                Flash(PiperBridge.SetAttribute(901, Math.Max(0, _moneyValue / 100 - _step) * 100));
+                Flash(PiperBridge.SetAttribute(901, Math.Max(0, _moneyValue - (long)_step * 1000)));
             if (GUI.Button(new Rect(x + 312, y, 110, 30), "翻倍"))
                 Flash(PiperBridge.SetAttribute(901, Math.Max(0, _moneyValue) * 2));
             if (GUI.Button(new Rect(x + 428, y, 100, 30), "刷新"))
@@ -404,12 +406,16 @@ public static class TrainerUI
                 for (int i = _page * Rows; i < end; i++)
                 {
                     var n = _npcs[i];
-                    GUI.Label(new Rect(x, y + 4, 220, 22), $"{PiperNames.NpcName(n.NpcId)}  好感={n.FavorValue}");
+                    // v4.17.7：游戏里好感显示的是等级，这里按配置阈值换算后一起显示
+                    int flv = PiperNames.FavorLevel(n.NpcId, n.FavorValue);
+                    string lvTxt = flv >= 0 ? $" Lv.{flv}" : "";
+                    GUI.Label(new Rect(x, y + 4, 220, 22), $"{PiperNames.NpcName(n.NpcId)}{lvTxt}（{n.FavorValue}）");
                     int nid = n.NpcId;
+                    // v4.17.7：按钮是"加/减"，旧代码分别写成了"设为步长"和"清零"
                     if (GUI.Button(new Rect(x + 226, y, 86, 26), $"+{StepName(_step)}"))
-                        Flash(PiperBridge.SetFavorNpc(nid, (int)Math.Min(_step, int.MaxValue)));
+                        Flash(PiperBridge.SetFavorNpc(nid, (int)Math.Min((long)n.FavorValue + _step, int.MaxValue)));
                     if (GUI.Button(new Rect(x + 316, y, 86, 26), $"−{StepName(_step)}"))
-                        Flash(PiperBridge.SetFavorNpc(nid, 0));
+                        Flash(PiperBridge.SetFavorNpc(nid, (int)Math.Max(0, (long)n.FavorValue - _step)));
                     y += RowH;
                 }
                 if (_npcs.Count == 0) { GUI.Label(new Rect(x, y, w, 22), "（无好感数据）"); y += RowH; }

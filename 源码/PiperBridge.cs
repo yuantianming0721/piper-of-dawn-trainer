@@ -11,6 +11,9 @@ namespace PiperTrainer;
 // - 面板显示的数字是"存档基准值"，可能与游戏内实时值有偏差；修改后立即生效
 public static class PiperBridge
 {
+    public static bool FeedbackSelfTest;   // 调试：加钱/加好感/加种子一次并回读校验
+    private static bool _feedbackTested;
+
     public static SaveLoadSystem.GameSaveData GSE()
     {
         try
@@ -155,8 +158,8 @@ public static class PiperBridge
             try { attrs.Load(); } catch (Exception e) { return "已改写但 Load() 异常: " + e.Message; }
             RawLog($"SetAttribute {attributeId} -> {target} x{hit}");
             string nm = attributeId == 901 ? "金币" : "属性" + attributeId;
-            Toast($"{nm} 设为 {target / (attributeId == 901 ? 100 : 1):0.##}");
-            return $"✔ {nm} → {target / (attributeId == 901 ? 100 : 1):0.##}";
+            Toast($"{nm} 设为 {target / (attributeId == 901 ? 1000 : 1):N0}");
+            return $"✔ {nm} → {target / (attributeId == 901 ? 1000 : 1):N0}";
         }
         catch (Exception e)
         {
@@ -403,13 +406,16 @@ public static class PiperBridge
             nd.Count = count;
             nd.Timestamp = 0;
             nd.SeedLogicID = 0;
-            nd.OriginalSeedItemID = 0;
+            nd.OriginalSeedItemID = -1;
             nd.ItemLogicID = (int)(maxLogic + 1);
+            // v4.17.7：种子必须同时写入 AllSeedSaveData，否则只有背包条目、种不下去
+            string seedKind = AttachSeedData(cfgId, nd.ItemLogicID, nd);
             items0.Add(nd);
             try { bag.Load(); }
             catch (Exception e)
             {
                 try { gse.BagSaveData.ItemDataList.RemoveAt(gse.BagSaveData.ItemDataList.Count - 1); gse.BagSaveData.Load(); } catch { }
+                RemoveLastSeed(seedKind);
                 return "✘ Load() 异常已回滚: " + e.Message;
             }
             int after = 0;
@@ -426,10 +432,88 @@ public static class PiperBridge
                 return "✔ 已添加 " + PiperNames.ItemName(cfgId) + " ×" + count;
             }
             try { items1.RemoveAt(items1.Count - 1); gse.BagSaveData.Load(); } catch { }
+            RemoveLastSeed(seedKind);
             if (after > before) return "⚠ 部分生效：现有 " + after + "（原 " + before + "）";
             return "⚠ 游戏拒绝了该物品，已回滚";
         }
         catch (Exception e) { return "✘ " + e.Message; }
+    }
+
+    // v4.17.7：种子关联数据。背包条目只是"外壳"，种植时游戏按 ItemData.SeedLogicID
+    // 去 AllSeedSaveData 找 SeedSaveData；只加外壳就是"能看见但不能用"。
+    private static string AttachSeedData(int cfgId, int itemLogic, SaveLoadSystem.ItemData nd)
+    {
+        try
+        {
+            if (!PiperNames.ItemName(cfgId).Contains("种子")) return null;
+            var gse = GSE();
+            var sd = gse == null ? null : gse.AllSeedSaveData;
+            if (sd == null) return null;
+
+            int maxLogic = 0;
+            var crop = sd.SeedSaveDataList;
+            if (crop != null) for (int i = 0; i < crop.Count; i++) { var x = crop[i]; if (x != null && x.SeedLogicID > maxLogic) maxLogic = x.SeedLogicID; }
+            var hyb = sd.HybridSeedSaveDataList;
+            if (hyb != null) for (int i = 0; i < hyb.Count; i++) { var x = hyb[i]; var d = x == null ? null : x.Data; if (d != null && d.SeedLogicID > maxLogic) maxLogic = d.SeedLogicID; }
+            var stf = sd.StaffSeedSaveDataList;
+            if (stf != null) for (int i = 0; i < stf.Count; i++) { var x = stf[i]; var d = x == null ? null : x.Data; if (d != null && d.SeedLogicID > maxLogic) maxLogic = d.SeedLogicID; }
+            int logic = maxLogic + 1;
+
+            if (cfgId >= 32000)   // 人柴种子
+            {
+                if (sd.StaffSeedSaveDataList == null) return null;
+                var rec = new SaveLoadSystem.StaffSeedSaveData();
+                rec.Data = new SaveLoadSystem.SeedSaveData { SeedLogicID = logic, SeedConfigID = cfgId, ItemLogicID = itemLogic };
+                rec.ResultStaffConfigIDQueue = new Il2CppSystem.Collections.Generic.List<int>();
+                sd.StaffSeedSaveDataList.Add(rec);
+                nd.SeedLogicID = logic;
+                try { sd.Load(); } catch { }
+                RawLog($"AddSeedData staff cfg={cfgId} seedLogic={logic} itemLogic={itemLogic}");
+                return "staff";
+            }
+            if (cfgId >= 31000)   // 杂交种子（基因列表留空，游戏按默认处理）
+            {
+                if (sd.HybridSeedSaveDataList == null) return null;
+                var rec = new SaveLoadSystem.HybridSeedSaveData();
+                rec.Data = new SaveLoadSystem.SeedSaveData { SeedLogicID = logic, SeedConfigID = cfgId, ItemLogicID = itemLogic };
+                rec.GrowthTime = 0;
+                rec.OriginalSeedItemID = -1;
+                rec.GeneList = new Il2CppSystem.Collections.Generic.List<int>();
+                sd.HybridSeedSaveDataList.Add(rec);
+                nd.SeedLogicID = logic;
+                try { sd.Load(); } catch { }
+                RawLog($"AddSeedData hybrid cfg={cfgId} seedLogic={logic} itemLogic={itemLogic}");
+                return "hybrid";
+            }
+            if (sd.SeedSaveDataList == null) return null;
+            var cr = new SaveLoadSystem.SeedSaveData { SeedLogicID = logic, SeedConfigID = cfgId, ItemLogicID = itemLogic };
+            sd.SeedSaveDataList.Add(cr);
+            nd.SeedLogicID = logic;
+            try { sd.Load(); } catch { }
+            RawLog($"AddSeedData crop cfg={cfgId} seedLogic={logic} itemLogic={itemLogic}");
+            return "crop";
+        }
+        catch (Exception e) { RawLog("AddSeedData err " + e.Message); return null; }
+    }
+
+    private static void RemoveLastSeed(string kind)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(kind)) return;
+            var gse = GSE();
+            var sd = gse == null ? null : gse.AllSeedSaveData;
+            if (sd == null) return;
+            if (kind == "staff" && sd.StaffSeedSaveDataList != null && sd.StaffSeedSaveDataList.Count > 0)
+                sd.StaffSeedSaveDataList.RemoveAt(sd.StaffSeedSaveDataList.Count - 1);
+            else if (kind == "hybrid" && sd.HybridSeedSaveDataList != null && sd.HybridSeedSaveDataList.Count > 0)
+                sd.HybridSeedSaveDataList.RemoveAt(sd.HybridSeedSaveDataList.Count - 1);
+            else if (kind == "crop" && sd.SeedSaveDataList != null && sd.SeedSaveDataList.Count > 0)
+                sd.SeedSaveDataList.RemoveAt(sd.SeedSaveDataList.Count - 1);
+            try { sd.Load(); } catch { }
+            RawLog("AddSeedData rollback " + kind);
+        }
+        catch { }
     }
 
     // ---------- 势力名对照（经验条/唯一等级实锤+暂定） ----------
@@ -455,6 +539,8 @@ public static class PiperBridge
             var ownedBuildings = ProbeBagBuilding(gse);
             ProbeBuildingConfigs(ownedBuildings);
             ProbeIllustrationSave(gse);
+            ProbePlayerFeedback(gse);  // v4.17.7：属性(金币)/好感/种子的真实运行时数据
+            if (FeedbackSelfTest && !_feedbackTested) { _feedbackTested = true; RunFeedbackSelfTest(gse); }
             ProbeRuntimeReachable();   // ev/buo/bjg/rl 实例可达性（图鉴配置表依赖此结果）
             RawLog("===== PROBE2 结束 =====");
             Toast(auto ? "结构探测完成（自动），明细进日志" : "结构探测完成，明细进日志");
@@ -929,6 +1015,166 @@ public static class PiperBridge
         DumpIntList("图鉴 Finished", ill.IllustrationFinishedList);
         DumpIntList("图鉴 ForceFinished", ill.IllustrationForceFinishedList);
         DumpIntList("图鉴 ForcePending", ill.IllustrationForcePendingList);
+    }
+
+    // g. 玩家可见数据：属性（金币）/ 好感 / 种子（v4.17.7 核实玩家反馈用）
+    private static void ProbePlayerFeedback(SaveLoadSystem.GameSaveData gse)
+    {
+        try
+        {
+            var attrs = gse.AllAttributeSaveData;
+            if (attrs != null && attrs.AttributeParams != null)
+                for (int i = 0; i < attrs.AttributeParams.Count; i++)
+                {
+                    var a = attrs.AttributeParams[i];
+                    if (a != null) RawLog($"PROBE2 ATTR id={a.AttributeId} value={a.Value}");
+                }
+        }
+        catch (Exception e) { RawLog("PROBE2 ATTR err " + e.Message); }
+
+        try
+        {
+            var npcs = gse.AllFavorData == null ? null : gse.AllFavorData.allNPCData;
+            if (npcs != null)
+                for (int i = 0; i < npcs.Count; i++)
+                {
+                    var n = npcs[i];
+                    if (n == null) continue;
+                    RawLog($"PROBE2 FAVOR npc={n.npcID} value={n.favorValue} lvl={PiperNames.FavorLevel(n.npcID, n.favorValue)} name='{PiperNames.NpcName(n.npcID)}'");
+                }
+        }
+        catch (Exception e) { RawLog("PROBE2 FAVOR err " + e.Message); }
+
+        // 好感配置：找等级阈值/上限（玩家反馈"好感度显示不对"）
+        try
+        {
+            var list = PiperNames.FavorConfigList();
+            int cnt = RCount(list);
+            RawLog("PROBE2 FAVORCFG count=" + cnt);
+            for (int i = 0; i < cnt && i < 2; i++)
+            {
+                var c = RAt(list, i);
+                var sb = new System.Text.StringBuilder();
+                foreach (var f in new[] { "bngi", "bnut", "bnuy", "bnuz", "bnva", "bnvb", "bnve" })
+                    sb.Append(f).Append('=').Append(RInt(c, f)).Append(' ');
+                foreach (var f in new[] { "bnuu", "bnuv", "bnuw", "bnux", "bnvc", "bnvd", "bnvf", "bnvg", "bnvi", "bnvj", "bnvk", "bnvl", "bnvm" })
+                {
+                    var l2 = RProp(c, f);
+                    int n2 = RCount(l2);
+                    if (n2 == 0) continue;
+                    sb.Append(f).Append("=[");
+                    for (int j = 0; j < n2 && j < 12; j++) { try { sb.Append(Convert.ToInt32(RAt(l2, j))).Append(','); } catch { } }
+                    sb.Append("] ");
+                }
+                RawLog("PROBE2 FAVORCFG[" + i + "] " + sb);
+            }
+        }
+        catch (Exception e) { RawLog("PROBE2 FAVORCFG err " + e.Message); }
+
+        try
+        {
+            var sd = gse.AllSeedSaveData;
+            if (sd != null)
+            {
+                RawLog($"PROBE2 SEED count seed={RCount(sd.SeedSaveDataList)} hybrid={RCount(sd.HybridSeedSaveDataList)} staff={RCount(sd.StaffSeedSaveDataList)}");
+                for (int i = 0; i < RCount(sd.SeedSaveDataList) && i < 8; i++)
+                {
+                    var x = RAt(sd.SeedSaveDataList, i);
+                    RawLog($"PROBE2 SEEDDATA[{i}] logic={RInt(x, "SeedLogicID")} cfg={RInt(x, "SeedConfigID")} itemLogic={RInt(x, "ItemLogicID")}");
+                }
+                for (int i = 0; i < RCount(sd.HybridSeedSaveDataList) && i < 5; i++)
+                {
+                    var x = RAt(sd.HybridSeedSaveDataList, i);
+                    var d = RProp(x, "Data");
+                    RawLog($"PROBE2 HYBRID[{i}] seedLogic={RInt(d, "SeedLogicID")} cfg={RInt(d, "SeedConfigID")} itemLogic={RInt(d, "ItemLogicID")} origItem={RInt(x, "OriginalSeedItemID")}");
+                }
+            }
+        }
+        catch (Exception e) { RawLog("PROBE2 SEED err " + e.Message); }
+
+        try
+        {
+            var items = gse.BagSaveData == null ? null : gse.BagSaveData.ItemDataList;
+            if (items != null)
+                for (int i = 0; i < items.Count; i++)
+                {
+                    var e = items[i];
+                    if (e == null) continue;
+                    var cat = PiperNames.CategoryName(PiperNames.ItemCategory(e.ConfigId));
+                    bool seedCat = cat.Contains("种子");
+                    if (!seedCat && e.SeedLogicID == 0 && e.OriginalSeedItemID == 0) continue;
+                    RawLog($"PROBE2 ITEM[{i}] cfg={e.ConfigId} name='{PiperNames.ItemName(e.ConfigId)}' cat={cat} count={e.Count} logic={e.ItemLogicID} seedLogic={e.SeedLogicID} origSeed={e.OriginalSeedItemID} ts={e.Timestamp}");
+                }
+        }
+        catch (Exception e) { RawLog("PROBE2 ITEM err " + e.Message); }
+    }
+
+    // h. 玩家反馈自测（v4.17.7，配置门控）：加钱/加好感/加种子后回读校验
+    private static void RunFeedbackSelfTest(SaveLoadSystem.GameSaveData gse)
+    {
+        RawLog("===== SELFTEST 开始 =====");
+
+        // 1) 金币：+1000 金币（raw +1,000,000）后回读并还原
+        try
+        {
+            var ps = gse.AllAttributeSaveData == null ? null : gse.AllAttributeSaveData.AttributeParams;
+            long orig = -1;
+            if (ps != null) for (int i = 0; i < ps.Count; i++) { var a = ps[i]; if (a != null && a.AttributeId == 901) { orig = a.Value; break; } }
+            if (orig >= 0)
+            {
+                SetAttribute(901, orig + 1000L * 1000);
+                long after = -1;
+                for (int i = 0; i < ps.Count; i++) { var a = ps[i]; if (a != null && a.AttributeId == 901) { after = a.Value; break; } }
+                RawLog($"SELFTEST MONEY orig={orig} after={after} delta={after - orig} expect=1000000");
+                SetAttribute(901, orig);
+            }
+            else RawLog("SELFTEST MONEY 未找到 901");
+        }
+        catch (Exception e) { RawLog("SELFTEST MONEY err " + e.Message); }
+
+        // 2) 好感：第一个 NPC +100 后回读并还原
+        try
+        {
+            var npcs = gse.AllFavorData == null ? null : gse.AllFavorData.allNPCData;
+            if (npcs != null && npcs.Count > 0 && npcs[0] != null)
+            {
+                int npc = npcs[0].npcID, orig = npcs[0].favorValue;
+                SetFavorNpc(npc, orig + 100);
+                int after = orig;
+                for (int i = 0; i < npcs.Count; i++) { var n = npcs[i]; if (n != null && n.npcID == npc) { after = n.favorValue; break; } }
+                RawLog($"SELFTEST FAVOR npc={npc} orig={orig} after={after} delta={after - orig} expect=100");
+                SetFavorNpc(npc, orig);
+            }
+        }
+        catch (Exception e) { RawLog("SELFTEST FAVOR err " + e.Message); }
+
+        // 3) 种子：加 3 个土豆种子（10003），检查背包与 SeedSaveData 关联
+        try
+        {
+            int beforeBag = 0, beforeSeed = 0;
+            var items = gse.BagSaveData == null ? null : gse.BagSaveData.ItemDataList;
+            if (items != null) for (int i = 0; i < items.Count; i++) { var e = items[i]; if (e != null && e.ConfigId == 10003) beforeBag += e.Count; }
+            var sd = gse.AllSeedSaveData;
+            if (sd != null && sd.SeedSaveDataList != null)
+                for (int i = 0; i < sd.SeedSaveDataList.Count; i++) { var x = sd.SeedSaveDataList[i]; if (x != null && x.SeedConfigID == 10003) beforeSeed++; }
+
+            string r = AddNewItem(10003, 3);
+            int afterBag = 0, afterSeed = 0, linked = 0;
+            if (items != null) for (int i = 0; i < items.Count; i++)
+                {
+                    var e = items[i]; if (e == null || e.ConfigId != 10003) continue;
+                    afterBag += e.Count;
+                    if (e.SeedLogicID > 0)
+                        for (int j = 0; sd != null && sd.SeedSaveDataList != null && j < sd.SeedSaveDataList.Count; j++)
+                        { var x = sd.SeedSaveDataList[j]; if (x != null && x.SeedLogicID == e.SeedLogicID) { linked++; break; } }
+                }
+            if (sd != null && sd.SeedSaveDataList != null)
+                for (int i = 0; i < sd.SeedSaveDataList.Count; i++) { var x = sd.SeedSaveDataList[i]; if (x != null && x.SeedConfigID == 10003) afterSeed++; }
+            RawLog($"SELFTEST SEED result='{r}' bagCount {beforeBag}->{afterBag} seedData {beforeSeed}->{afterSeed} linkedItems={linked}");
+        }
+        catch (Exception e) { RawLog("SELFTEST SEED err " + e.Message); }
+
+        RawLog("===== SELFTEST 结束 =====");
     }
 
     private static void DumpIntList(string tag, Il2CppSystem.Collections.Generic.List<int> l)
