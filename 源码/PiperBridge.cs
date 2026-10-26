@@ -173,8 +173,16 @@ public static class PiperBridge
 
     private static Dictionary<int, int> _origCounts;   // 会话快照（还原用）
 
-    private static void EnsureOrigins(SaveLoadSystem.BagData bag)
+    // v4.17.8：背包读写前先把"运行时 → 存档树"同步一次。
+    // 游戏新捡的物品只存在于运行时，而 bag.Load() 会用存档树覆盖运行时——
+    // 不先 Save() 就改数量，会把刚到手的物品直接冲掉（玩家反馈的"改没物品"）。
+    private static void SyncBagFromRuntime(SaveLoadSystem.BagData bag)
     {
+        try { bag.Save(); }
+        catch (Exception e) { RawLog("BAGSYNC Save() 失败: " + e.Message); }
+    }
+
+    private static void EnsureOrigins(SaveLoadSystem.BagData bag)    {
         if (_origCounts != null) return;
         _origCounts = new Dictionary<int, int>();
         try
@@ -202,6 +210,18 @@ public static class PiperBridge
         return null;
     }
 
+    private static void RemoveItemByLogic(SaveLoadSystem.BagData bag, int logicId)
+    {
+        try
+        {
+            var items = bag.ItemDataList;
+            if (items == null) return;
+            for (int i = items.Count - 1; i >= 0; i--)
+                if (items[i] != null && items[i].ItemLogicID == logicId) items.RemoveAt(i);
+        }
+        catch { }
+    }
+
     // 设为绝对数量并回读校验；游戏拒绝/改写则自动还原
     private static string SafeSetCount(SaveLoadSystem.BagData bag, SaveLoadSystem.ItemData it, int target)
     {
@@ -214,13 +234,17 @@ public static class PiperBridge
         catch (Exception e) { it.Count = before; try { bag.Load(); } catch { } return "✘ Load() 异常已还原: " + e.Message; }
         try
         {
+            // v4.17.8：Load() 只把树推进运行时，树本身不会回写。必须再 Save() 一次
+            // （运行时→树）才能读到游戏真正接受的值；否则校验永远通过。
+            try { bag.Save(); } catch { }
             var it2 = FindByLogic(bag, logic);
-            if (it2 == null) { it.Count = before; try { bag.Load(); } catch { } return "⚠ 回读为空，已还原"; }
+            if (it2 == null) { try { bag.Load(); } catch { } return "⚠ 游戏未保留该物品（运行时回读为空），已放弃写入"; }
             if (it2.Count != target)
             {
+                int got = it2.Count;
                 it2.Count = before;
                 try { bag.Load(); } catch { }
-                return "⚠ 该物品不接受 " + target + "（游戏回写为 " + it2.Count + "），已还原为 " + before;
+                return "⚠ 该物品不接受 " + target + "（运行时为 " + got + "），已还原为 " + before;
             }
         }
         catch (Exception e) { return "⚠ 回读异常: " + e.Message; }
@@ -238,6 +262,7 @@ public static class PiperBridge
             var gse = GSE();
             if (gse == null) { note = "GameSaveEntity 未就绪"; return list; }
             var bag = gse.BagSaveData;
+            SyncBagFromRuntime(bag);   // 新捡到的物品只在运行时，先同步进树
             EnsureOrigins(bag);
             var items = bag.ItemDataList;
             if (items == null) { note = "ItemDataList 为空"; return list; }
@@ -260,6 +285,7 @@ public static class PiperBridge
         try
         {
             var bag = gse.BagSaveData;
+            SyncBagFromRuntime(bag);   // 先保住运行时新物品，再按 logicId 重新定位
             EnsureOrigins(bag);
             var it = FindByLogic(bag, logicId);
             if (it == null) return "⚠ 未找到该物品（新物品请点背包页[刷新]后再试）";
@@ -286,12 +312,16 @@ public static class PiperBridge
         try
         {
             var bag = gse.BagSaveData;
+            SyncBagFromRuntime(bag);
             var it = FindByLogic(bag, logicId);
             if (it == null) return "⚠ 未找到该物品";
             it.Count = _origCounts[logicId];
             bag.Load();
-            RawLog("RestoreItemCount logic=" + logicId + " -> " + it.Count);
-            return "✔ 已还原为 " + it.Count;
+            try { bag.Save(); } catch { }   // v4.17.8：回读运行时真实值
+            var it2 = FindByLogic(bag, logicId);
+            int now = it2 == null ? -1 : it2.Count;
+            RawLog("RestoreItemCount logic=" + logicId + " -> " + now);
+            return "✔ 已还原为 " + now;
         }
         catch (Exception e) { return "✘ " + e.Message; }
     }
@@ -304,6 +334,7 @@ public static class PiperBridge
         try
         {
             var bag = gse.BagSaveData;
+            SyncBagFromRuntime(bag);
             EnsureOrigins(bag);
             var items = bag.ItemDataList;
             var src = FindByLogic(bag, logicId);
@@ -336,6 +367,7 @@ public static class PiperBridge
                 return "✘ Load() 异常已回滚: " + e.Message;
             }
             int cnt = 0;
+            try { bag.Save(); } catch { }   // v4.17.8：回读运行时真实结果
             var items2 = bag.ItemDataList;
             for (int i = 0; i < items2.Count; i++)
             {
@@ -362,6 +394,7 @@ public static class PiperBridge
         try
         {
             var bag = gse.BagSaveData;
+            SyncBagFromRuntime(bag);
             EnsureOrigins(bag);
             var items = bag.ItemDataList;
             if (items == null) return "⚠ ItemDataList 为空";
@@ -392,15 +425,50 @@ public static class PiperBridge
         try
         {
             var bag = gse.BagSaveData;
+            SyncBagFromRuntime(bag);   // 先收编运行时新物品，避免 Load() 时丢失
             int before = 0, maxLogic = 0;
             var items0 = bag.ItemDataList;
+            SaveLoadSystem.ItemData stack = null;
             for (int i = 0; i < items0.Count; i++)
             {
                 var e = items0[i];
                 if (e == null) continue;
-                if (e.ConfigId == cfgId) before += e.Count;
+                if (e.ConfigId == cfgId) { before += e.Count; if (stack == null) stack = e; }
                 if (e.ItemLogicID > maxLogic) maxLogic = e.ItemLogicID;
             }
+
+            bool isSeed = PiperNames.ItemName(cfgId).Contains("种子");
+            // v4.17.8：种子按 ConfigId 堆叠——游戏会把新条目并进原堆叠并打乱 ItemLogicID。
+            // 已有堆叠时直接加数量，并确保它的种子关联存在（顺带修复旧版留下的 seedLogic=0）。
+            if (isSeed && stack != null)
+            {
+                int beforeCount = stack.Count;
+                int logic = stack.ItemLogicID;
+                EnsureSeedLink(stack, cfgId);
+                stack.Count = Math.Min(9999999, beforeCount + count);
+                int want = stack.Count;
+                try { bag.Load(); }
+                catch (Exception e)
+                {
+                    var s0 = FindByLogic(bag, logic); if (s0 != null) s0.Count = beforeCount;
+                    try { bag.Load(); } catch { }
+                    return "✘ Load() 异常已还原: " + e.Message;
+                }
+                try { bag.Save(); } catch { }
+                var s1 = FindByLogic(bag, logic);
+                int got = s1 == null ? -1 : s1.Count;
+                int seedLink = s1 == null ? -1 : s1.SeedLogicID;
+                if (got >= want)
+                {
+                    RawLog($"AddNewItem(seed stack) cfg={cfgId} +{count} {beforeCount}->{got} seedLogic={seedLink}");
+                    Toast(PiperNames.ItemName(cfgId) + " +" + count + "（现有 " + got + "）");
+                    if (seedLink > 0) return "✔ 已添加 " + PiperNames.ItemName(cfgId) + " ×" + count;
+                    return "⚠ 数量已加，但种子关联未建立（可能仍无法种植）";
+                }
+                if (s1 != null) { s1.Count = beforeCount; try { bag.Load(); } catch { } }
+                return "⚠ 游戏未接受该数量（运行时 " + got + "，已还原 " + beforeCount + "）";
+            }
+
             var nd = new SaveLoadSystem.ItemData();
             nd.ConfigId = cfgId;
             nd.Count = count;
@@ -411,13 +479,20 @@ public static class PiperBridge
             // v4.17.7：种子必须同时写入 AllSeedSaveData，否则只有背包条目、种不下去
             string seedKind = AttachSeedData(cfgId, nd.ItemLogicID, nd);
             items0.Add(nd);
-            try { bag.Load(); }
+            try
+            {
+                // v4.17.8：先让种子管理器载入新记录，再由背包 Load 建立 SeedLogicID 关联
+                if (seedKind != null) { try { gse.AllSeedSaveData.Load(); } catch { } }
+                bag.Load();
+            }
             catch (Exception e)
             {
-                try { gse.BagSaveData.ItemDataList.RemoveAt(gse.BagSaveData.ItemDataList.Count - 1); gse.BagSaveData.Load(); } catch { }
+                try { RemoveItemByLogic(gse.BagSaveData, nd.ItemLogicID); gse.BagSaveData.Load(); } catch { }
                 RemoveLastSeed(seedKind);
                 return "✘ Load() 异常已回滚: " + e.Message;
             }
+            // v4.17.8：再 Save() 回读运行时真实结果（Load 不保证游戏接受该条目）
+            try { bag.Save(); } catch { }
             int after = 0;
             var items1 = gse.BagSaveData.ItemDataList;
             for (int i = 0; i < items1.Count; i++)
@@ -431,7 +506,7 @@ public static class PiperBridge
                 Toast(PiperNames.ItemName(cfgId) + " +" + count + "（现有 " + after + "）");
                 return "✔ 已添加 " + PiperNames.ItemName(cfgId) + " ×" + count;
             }
-            try { items1.RemoveAt(items1.Count - 1); gse.BagSaveData.Load(); } catch { }
+            try { RemoveItemByLogic(gse.BagSaveData, nd.ItemLogicID); gse.BagSaveData.Load(); } catch { }
             RemoveLastSeed(seedKind);
             if (after > before) return "⚠ 部分生效：现有 " + after + "（原 " + before + "）";
             return "⚠ 游戏拒绝了该物品，已回滚";
@@ -467,7 +542,6 @@ public static class PiperBridge
                 rec.ResultStaffConfigIDQueue = new Il2CppSystem.Collections.Generic.List<int>();
                 sd.StaffSeedSaveDataList.Add(rec);
                 nd.SeedLogicID = logic;
-                try { sd.Load(); } catch { }
                 RawLog($"AddSeedData staff cfg={cfgId} seedLogic={logic} itemLogic={itemLogic}");
                 return "staff";
             }
@@ -481,7 +555,6 @@ public static class PiperBridge
                 rec.GeneList = new Il2CppSystem.Collections.Generic.List<int>();
                 sd.HybridSeedSaveDataList.Add(rec);
                 nd.SeedLogicID = logic;
-                try { sd.Load(); } catch { }
                 RawLog($"AddSeedData hybrid cfg={cfgId} seedLogic={logic} itemLogic={itemLogic}");
                 return "hybrid";
             }
@@ -489,15 +562,59 @@ public static class PiperBridge
             var cr = new SaveLoadSystem.SeedSaveData { SeedLogicID = logic, SeedConfigID = cfgId, ItemLogicID = itemLogic };
             sd.SeedSaveDataList.Add(cr);
             nd.SeedLogicID = logic;
-            try { sd.Load(); } catch { }
             RawLog($"AddSeedData crop cfg={cfgId} seedLogic={logic} itemLogic={itemLogic}");
             return "crop";
         }
         catch (Exception e) { RawLog("AddSeedData err " + e.Message); return null; }
     }
 
-    private static void RemoveLastSeed(string kind)
+    // 确保已有种子的堆叠有可用的种子记录；同时修正 ItemLogicID 不一致（v4.17.8）
+    private static bool EnsureSeedLink(SaveLoadSystem.ItemData stack, int cfgId)
     {
+        try
+        {
+            var gse = GSE();
+            var sd = gse == null ? null : gse.AllSeedSaveData;
+            if (sd == null) return false;
+            int logic = stack.SeedLogicID;
+            if (logic > 0)
+            {
+                if (sd.SeedSaveDataList != null)
+                    for (int i = 0; i < sd.SeedSaveDataList.Count; i++)
+                    {
+                        var x = sd.SeedSaveDataList[i];
+                        if (x == null || x.SeedLogicID != logic) continue;
+                        if (x.ItemLogicID != stack.ItemLogicID) { x.ItemLogicID = stack.ItemLogicID; try { sd.Load(); } catch { } }
+                        return true;
+                    }
+                if (sd.HybridSeedSaveDataList != null)
+                    for (int i = 0; i < sd.HybridSeedSaveDataList.Count; i++)
+                    {
+                        var h = sd.HybridSeedSaveDataList[i];
+                        var x = h == null ? null : h.Data;
+                        if (x == null || x.SeedLogicID != logic) continue;
+                        if (x.ItemLogicID != stack.ItemLogicID) { x.ItemLogicID = stack.ItemLogicID; try { sd.Load(); } catch { } }
+                        return true;
+                    }
+                if (sd.StaffSeedSaveDataList != null)
+                    for (int i = 0; i < sd.StaffSeedSaveDataList.Count; i++)
+                    {
+                        var h = sd.StaffSeedSaveDataList[i];
+                        var x = h == null ? null : h.Data;
+                        if (x == null || x.SeedLogicID != logic) continue;
+                        if (x.ItemLogicID != stack.ItemLogicID) { x.ItemLogicID = stack.ItemLogicID; try { sd.Load(); } catch { } }
+                        return true;
+                    }
+                stack.SeedLogicID = 0;   // 指向了不存在的记录
+            }
+            var kind = AttachSeedData(cfgId, stack.ItemLogicID, stack);
+            if (kind != null) { try { sd.Load(); } catch { } return true; }
+        }
+        catch (Exception e) { RawLog("EnsureSeedLink err " + e.Message); }
+        return false;
+    }
+
+    private static void RemoveLastSeed(string kind)    {
         try
         {
             if (string.IsNullOrEmpty(kind)) return;
@@ -723,7 +840,9 @@ public static class PiperBridge
         try
         {
             var gse = GSE();
-            var ol = gse == null ? null : gse.BagSaveData.OwnedBuildingConfigIDList;
+            var bag = gse == null ? null : gse.BagSaveData;
+            if (bag != null) SyncBagFromRuntime(bag);   // 新拿到的建筑同样要先同步进树
+            var ol = bag == null ? null : bag.OwnedBuildingConfigIDList;
             if (ol != null) for (int i = 0; i < ol.Count; i++) owned.Add(ol[i]);
         }
         catch { }
@@ -748,6 +867,7 @@ public static class PiperBridge
         try
         {
             var bag = gse.BagSaveData;
+            SyncBagFromRuntime(bag);
             var ol = bag.OwnedBuildingConfigIDList;
             var bdl = bag.BuildingDataList;
             if (ol == null) return "⚠ OwnedBuildingConfigIDList 为空";
@@ -797,6 +917,7 @@ public static class PiperBridge
         try
         {
             var bag = gse.BagSaveData;
+            SyncBagFromRuntime(bag);
             var bdl = bag.BuildingDataList;
             if (bdl == null) return "⚠ BuildingDataList 为空";
             int idx = -1, cnt = 0;
@@ -826,6 +947,7 @@ public static class PiperBridge
         try
         {
             var bag = gse.BagSaveData;
+            SyncBagFromRuntime(bag);
             var bdl = bag.BuildingDataList;
             var ol = bag.OwnedBuildingConfigIDList;
             int removedData = 0;
@@ -1160,21 +1282,55 @@ public static class PiperBridge
 
             string r = AddNewItem(10003, 3);
             int afterBag = 0, afterSeed = 0, linked = 0;
-            if (items != null) for (int i = 0; i < items.Count; i++)
+            var itemsAfter = gse.BagSaveData == null ? null : gse.BagSaveData.ItemDataList;
+            var sdAfter = gse.AllSeedSaveData;
+            if (itemsAfter != null) for (int i = 0; i < itemsAfter.Count; i++)
                 {
-                    var e = items[i]; if (e == null || e.ConfigId != 10003) continue;
+                    var e = itemsAfter[i]; if (e == null || e.ConfigId != 10003) continue;
                     afterBag += e.Count;
+                    RawLog($"SELFTEST SEEDITEM logic={e.ItemLogicID} seedLogic={e.SeedLogicID} count={e.Count}");
                     if (e.SeedLogicID > 0)
-                        for (int j = 0; sd != null && sd.SeedSaveDataList != null && j < sd.SeedSaveDataList.Count; j++)
-                        { var x = sd.SeedSaveDataList[j]; if (x != null && x.SeedLogicID == e.SeedLogicID) { linked++; break; } }
+                        for (int j = 0; sdAfter != null && sdAfter.SeedSaveDataList != null && j < sdAfter.SeedSaveDataList.Count; j++)
+                        { var x = sdAfter.SeedSaveDataList[j]; if (x != null && x.SeedLogicID == e.SeedLogicID) { linked++; break; } }
                 }
-            if (sd != null && sd.SeedSaveDataList != null)
-                for (int i = 0; i < sd.SeedSaveDataList.Count; i++) { var x = sd.SeedSaveDataList[i]; if (x != null && x.SeedConfigID == 10003) afterSeed++; }
+            if (sdAfter != null && sdAfter.SeedSaveDataList != null)
+                for (int i = 0; i < sdAfter.SeedSaveDataList.Count; i++) { var x = sdAfter.SeedSaveDataList[i]; if (x != null && x.SeedConfigID == 10003) afterSeed++; }
             RawLog($"SELFTEST SEED result='{r}' bagCount {beforeBag}->{afterBag} seedData {beforeSeed}->{afterSeed} linkedItems={linked}");
         }
         catch (Exception e) { RawLog("SELFTEST SEED err " + e.Message); }
 
+        // 4) 改数量：取第一项 +1 再还原（验证 Save→改→Load→Save 回读链路）
+        try
+        {
+            var items = gse.BagSaveData == null ? null : gse.BagSaveData.ItemDataList;
+            if (items != null && items.Count > 0 && items[0] != null)
+            {
+                int cfg = items[0].ConfigId, logic = items[0].ItemLogicID, orig = items[0].Count;
+                string r = SetItemCount(logic, orig + 1);
+                var it2 = FindByLogic(gse.BagSaveData, logic);
+                int after = it2 == null ? -1 : it2.Count;
+                RawLog($"SELFTEST COUNT cfg={cfg} logic={logic} {orig}->{after} result='{r}'");
+                SetItemCount(logic, orig);
+            }
+        }
+        catch (Exception e) { RawLog("SELFTEST COUNT err " + e.Message); }
+
+        RunBagSyncSelfTest(gse);
         RawLog("===== SELFTEST 结束 =====");
+    }
+    private static void RunBagSyncSelfTest(SaveLoadSystem.GameSaveData gse)
+    {
+        try
+        {
+            var bag = gse.BagSaveData;
+            int c0 = bag.ItemDataList == null ? -1 : bag.ItemDataList.Count;
+            bag.Save();
+            int c1 = bag.ItemDataList == null ? -1 : bag.ItemDataList.Count;
+            bag.Save();
+            int c2 = bag.ItemDataList == null ? -1 : bag.ItemDataList.Count;
+            RawLog($"SELFTEST BAGSYNC counts {c0} -> {c1} -> {c2}（应相等）");
+        }
+        catch (Exception e) { RawLog("SELFTEST BAGSYNC err " + e.Message); }
     }
 
     private static void DumpIntList(string tag, Il2CppSystem.Collections.Generic.List<int> l)

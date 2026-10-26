@@ -9,7 +9,7 @@ using UnityEngine;
 
 namespace PiperTrainer;
 
-[BepInPlugin("local.coldbrew.piper.trainer", "吹笛人内置修改器 (IL2CPP)", "4.17.7")]
+[BepInPlugin("local.coldbrew.piper.trainer", "吹笛人内置修改器 (IL2CPP)", "4.17.8")]
 public class PiperTrainerPlugin : BasePlugin
 {
     public static PiperTrainerPlugin Instance;
@@ -48,7 +48,7 @@ public class PiperTrainerPlugin : BasePlugin
         Log.LogInfo("PiperTrainer (IL2CPP) 已加载，按 Home 打开菜单");
     }
 
-    public const string Ver = "4.17.7";
+    public const string Ver = "4.17.8";
 
     public static int HotkeyCode => Instance == null || Instance._hotkey == null ? (int)KeyCode.Home : Instance._hotkey.Value;
     public static void Toggle() => _show = !_show;
