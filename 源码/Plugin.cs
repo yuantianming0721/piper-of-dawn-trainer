@@ -9,12 +9,13 @@ using UnityEngine;
 
 namespace PiperTrainer;
 
-[BepInPlugin("local.coldbrew.piper.trainer", "吹笛人内置修改器 (IL2CPP)", "4.17.8")]
+[BepInPlugin("local.coldbrew.piper.trainer", "吹笛人内置修改器 (IL2CPP)", "4.17.9")]
 public class PiperTrainerPlugin : BasePlugin
 {
     public static PiperTrainerPlugin Instance;
     public static ManualLogSource Log2;
     private ConfigEntry<int> _hotkey;
+    public static ConfigEntry<int> WinW, WinH;
     private static bool _show;
     private static bool _updateLogged, _onguiLogged;
 
@@ -24,6 +25,9 @@ public class PiperTrainerPlugin : BasePlugin
         Log2 = Log;
         // 用枚举让编译器取正确值（Home=278）；cfg 里存 int 避免 interop 枚举进 toml 的兼容问题
         _hotkey = Config.Bind("通用", "热键KeyCode", (int)KeyCode.Home, "打开/关闭修改器菜单（UnityEngine.KeyCode 值）");
+        // 窗口大小（v4.17.9）：玩家可调，写入 cfg 持久化
+        try { WinW = Config.Bind("通用", "窗口宽度", 560, "修改器窗口宽度（像素，560~1600，默认 560）"); } catch { }
+        try { WinH = Config.Bind("通用", "窗口高度", 700, "修改器窗口高度（像素，700~1200，默认 700；只可调大）"); } catch { }
         // UI 自动推进（仅开发调试；进程内模拟点击开始页/菜单按钮，正常使用保持 false）
         try { DebugDriver.Enabled = Config.Bind("调试", "自动推进开始页", false, "开发调试用：进程内自动模拟点击开始页与主菜单按钮").Value; } catch { }
         try { DebugDriver.PopOkOnce = Config.Bind("调试", "点击弹窗确认一次", false, "开发调试用：一次性点击读取确认弹窗(UI_Pop/mBtnOK)").Value; } catch { }
@@ -34,6 +38,9 @@ public class PiperTrainerPlugin : BasePlugin
         try { PiperBridge.FeedbackSelfTest = Config.Bind("调试", "玩家反馈自测", false, "开发调试用：加钱/加好感/加种子各一次并回读校验").Value; } catch { }
         try { DebugCapture.Enabled = Config.Bind("调试", "截图巡检", false, "开发调试用：自动开菜单逐页签截图（含员工页回满前后对比）").Value; } catch { }
         try { DebugCapture.Dir = Config.Bind("调试", "截图目录", "", "截图巡检输出目录（正斜杠，如 E:/out/shots/）").Value; } catch { }
+
+        // v4.17.9：应用玩家配置的窗口尺寸（clamp 在 ApplySize 内）
+        try { TrainerUI.ApplySize(WinW == null ? 560 : WinW.Value, WinH == null ? 700 : WinH.Value); } catch { }
 
         ClassInjector.RegisterTypeInIl2Cpp<TrainerComponent>();
 
@@ -48,10 +55,22 @@ public class PiperTrainerPlugin : BasePlugin
         Log.LogInfo("PiperTrainer (IL2CPP) 已加载，按 Home 打开菜单");
     }
 
-    public const string Ver = "4.17.8";
+    public const string Ver = "4.17.9";
 
     public static int HotkeyCode => Instance == null || Instance._hotkey == null ? (int)KeyCode.Home : Instance._hotkey.Value;
     public static void Toggle() => _show = !_show;
+
+    // v4.17.9：面板底部尺寸按钮调用；clamp 后应用并写回 cfg（ConfigEntry setter 自动保存）
+    public static void SetWindowSize(int w, int h)
+    {
+        try
+        {
+            TrainerUI.ApplySize(w, h);
+            if (WinW != null) WinW.Value = Mathf.RoundToInt(TrainerUI.PanelRect.width);
+            if (WinH != null) WinH.Value = Mathf.RoundToInt(TrainerUI.PanelRect.height);
+        }
+        catch (Exception e) { Log2?.LogWarning("SetWindowSize: " + e.Message); }
+    }
     public static void SetVisible(bool v) => _show = v;
     public static bool Visible => _show;
 }

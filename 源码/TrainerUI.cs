@@ -39,11 +39,25 @@ public static class TrainerUI
     private static string _bldsNote = "";
     private static int _bFilter;   // 0=全部 1=未拥有 2=已拥有
 
-    private const int Rows = 7;
     private const float RowH = 34f;
+    // v4.17.9：每页行数随窗口高度变化（700 高 = 7 行；每加 34px 多一行）
+    // 下限锁 7 行：好感页的势力列表在更矮的窗口里会压到底部按钮（实测 560x600 重叠）
+    private static int Rows => Mathf.Clamp(7 + (int)((_rect.height - 700f) / RowH), 7, 20);
 
     public static Rect PanelRect => _rect;
     public static int CurrentTab => _tab;
+
+    // v4.17.9：应用窗口尺寸（配置/底部按钮共用），clamp 到安全范围并把窗口夹回屏幕
+    public static void ApplySize(int w, int h)
+    {
+        float maxW = Mathf.Max(560f, Mathf.Min(1600f, Screen.width - 24f));
+        float maxH = Mathf.Max(700f, Mathf.Min(1200f, Screen.height - 24f));
+        _rect.width = Mathf.Clamp(w, 560f, maxW);
+        _rect.height = Mathf.Clamp(h, 700f, maxH);
+        _rect.x = Mathf.Clamp(_rect.x, 0f, Mathf.Max(0f, Screen.width - _rect.width - 8f));
+        _rect.y = Mathf.Clamp(_rect.y, 0f, Mathf.Max(0f, Screen.height - 40f));
+        _page = 0;
+    }
     // 开发调试：程序化切换页签（DebugCapture 截图巡检用），与点 Tab 按钮同逻辑
     public static void DebugSwitchTab(int i)
     {
@@ -55,8 +69,9 @@ public static class TrainerUI
     }
     // 背包页搜索行在面板内的固定位置（与 DrawInner 布局一致）
     public static Rect SearchFieldRect => new Rect(_rect.x + 56, _rect.y + 118, 220, 24);
-    // 打字的搜索框放在面板右侧外部（避开 IMGUI 绘制层，保证可见可点）
-    public static Rect ExternalSearchRect => new Rect(_rect.x + _rect.width + 8, _rect.y + 118, 240, 30);
+    // 打字的搜索框放在面板右侧外部（避开 IMGUI 绘制层，保证可见可点）；v4.17.9 右侧夹住屏幕
+    public static Rect ExternalSearchRect => new Rect(
+        Mathf.Min(_rect.x + _rect.width + 8, Screen.width - 248), _rect.y + 118, 240, 30);
 
     public static void Draw()
     {
@@ -137,6 +152,9 @@ public static class TrainerUI
             else if (_drag && t == 1)
             {
                 _drag = false;
+                // v4.17.9：松手时把窗口夹回屏幕，避免拖出可视区找不回
+                _rect.x = Mathf.Clamp(_rect.x, 0f, Mathf.Max(0f, Screen.width - _rect.width - 8f));
+                _rect.y = Mathf.Clamp(_rect.y, 0f, Mathf.Max(0f, Screen.height - 40f));
                 e.Use();
             }
         }
@@ -168,7 +186,7 @@ public static class TrainerUI
 
         GUI.Box(new Rect(_rect.x, _rect.y, _rect.width, _rect.height), "");
         GUI.Label(new Rect(_rect.x + 10, _rect.y + 4, _rect.width - 110, 22),
-            "吹笛人 · 内置修改器 v" + PiperTrainerPlugin.Ver);
+            "吹笛人 · 内置修改器 v" + PiperTrainerPlugin.Ver + "   " + (int)_rect.width + "×" + (int)_rect.height);
 
         float x = _rect.x + 12;
         float w = _rect.width - 24;
@@ -622,9 +640,28 @@ public static class TrainerUI
         if (GUI.Button(new Rect(x, _rect.y + _rect.height - 60, 150, 24), "导出诊断日志"))
             Flash(PiperBridge.ExportAll());
 
+        // ---- 窗口尺寸（v4.17.9，写回 cfg 持久化） ----
+        float szY = _rect.y + _rect.height - 32;
+        float szX = x;
+        if (GUI.Button(new Rect(szX, szY, 40, 24), "宽−"))
+            PiperTrainerPlugin.SetWindowSize((int)_rect.width - 40, (int)_rect.height);
+        szX += 44;
+        if (GUI.Button(new Rect(szX, szY, 40, 24), "宽+"))
+            PiperTrainerPlugin.SetWindowSize((int)_rect.width + 40, (int)_rect.height);
+        szX += 44;
+        if (GUI.Button(new Rect(szX, szY, 40, 24), "高−"))
+            PiperTrainerPlugin.SetWindowSize((int)_rect.width, (int)_rect.height - 34);
+        szX += 44;
+        if (GUI.Button(new Rect(szX, szY, 40, 24), "高+"))
+            PiperTrainerPlugin.SetWindowSize((int)_rect.width, (int)_rect.height + 34);
+        szX += 44;
+        if (GUI.Button(new Rect(szX, szY, 50, 24), "重置"))
+            PiperTrainerPlugin.SetWindowSize(560, 700);
+        szX += 54;
+
         // ---- 状态栏 ----
         string stat = _status;
         if (stat.Length > 0 && Time.realtimeSinceStartup - _statusTime > 6) stat = "";
-        GUI.Label(new Rect(x, _rect.y + _rect.height - 30, w, 22), stat);
+        GUI.Label(new Rect(szX, szY + 2, Mathf.Max(60, x + w - szX), 22), stat);
     }
 }
