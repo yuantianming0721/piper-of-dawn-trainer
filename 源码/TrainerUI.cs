@@ -269,6 +269,11 @@ public static class TrainerUI
             GUI.Label(new Rect(x, y, 300, 22), _showAll
                 ? ("【全部物品】" + PiperNames.ItemNames.Count + " 种（可添加未持有）")
                 : ("【背包】" + (_items == null ? "" : _items.Count + " 项")));
+            if (GUI.Button(new Rect(x + w - 196, y, 66, 22), "修复种子"))
+            {
+                Flash(PiperBridge.RepairSeedLinks());
+                _items = PiperBridge.GetItems(out _itemsNote);
+            }
             if (GUI.Button(new Rect(x + w - 126, y, 64, 22), "结构探测"))
             {
                 PiperBridge.DumpStructures(false);

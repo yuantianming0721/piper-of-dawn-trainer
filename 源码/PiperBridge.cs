@@ -614,7 +614,113 @@ public static class PiperBridge
         return false;
     }
 
-    private static void RemoveLastSeed(string kind)    {
+    // 自测用：按 SeedLogicID 删除种子记录（返回删除条数）
+    private static int RemoveSeedRecordByLogic(SaveLoadSystem.AllSeedSaveData sd, int seedLogic)
+    {
+        int removed = 0;
+        try
+        {
+            if (sd == null) return 0;
+            if (sd.SeedSaveDataList != null)
+                for (int i = sd.SeedSaveDataList.Count - 1; i >= 0; i--)
+                { var x = sd.SeedSaveDataList[i]; if (x != null && x.SeedLogicID == seedLogic) { sd.SeedSaveDataList.RemoveAt(i); removed++; } }
+            if (sd.HybridSeedSaveDataList != null)
+                for (int i = sd.HybridSeedSaveDataList.Count - 1; i >= 0; i--)
+                { var h = sd.HybridSeedSaveDataList[i]; var x = h == null ? null : h.Data; if (x != null && x.SeedLogicID == seedLogic) { sd.HybridSeedSaveDataList.RemoveAt(i); removed++; } }
+            if (sd.StaffSeedSaveDataList != null)
+                for (int i = sd.StaffSeedSaveDataList.Count - 1; i >= 0; i--)
+                { var h = sd.StaffSeedSaveDataList[i]; var x = h == null ? null : h.Data; if (x != null && x.SeedLogicID == seedLogic) { sd.StaffSeedSaveDataList.RemoveAt(i); removed++; } }
+        }
+        catch { }
+        return removed;
+    }
+
+    // 判断某个背包种子的关联是否完整（记录存在、ConfigID/ItemLogicID 都对得上）
+    private static bool SeedLinkOk(SaveLoadSystem.AllSeedSaveData sd, SaveLoadSystem.ItemData it)
+    {
+        if (sd == null || it == null || it.SeedLogicID <= 0) return false;
+        int l = it.SeedLogicID;
+        if (sd.SeedSaveDataList != null)
+            for (int i = 0; i < sd.SeedSaveDataList.Count; i++)
+            {
+                var x = sd.SeedSaveDataList[i];
+                if (x != null && x.SeedLogicID == l && x.SeedConfigID == it.ConfigId && x.ItemLogicID == it.ItemLogicID) return true;
+            }
+        if (sd.HybridSeedSaveDataList != null)
+            for (int i = 0; i < sd.HybridSeedSaveDataList.Count; i++)
+            {
+                var h = sd.HybridSeedSaveDataList[i];
+                var x = h == null ? null : h.Data;
+                if (x != null && x.SeedLogicID == l && x.SeedConfigID == it.ConfigId && x.ItemLogicID == it.ItemLogicID) return true;
+            }
+        if (sd.StaffSeedSaveDataList != null)
+            for (int i = 0; i < sd.StaffSeedSaveDataList.Count; i++)
+            {
+                var h = sd.StaffSeedSaveDataList[i];
+                var x = h == null ? null : h.Data;
+                if (x != null && x.SeedLogicID == l && x.SeedConfigID == it.ConfigId && x.ItemLogicID == it.ItemLogicID) return true;
+            }
+        return false;
+    }
+
+    // v4.18.0：一键检查背包种子与 SeedSaveData 的关联，缺失/错位就地补建
+    public static string RepairSeedLinks()
+    {
+        var gse = GSE();
+        if (gse == null) return "⚠ 未就绪（读档进游戏后再试）";
+        try
+        {
+            var bag = gse.BagSaveData;
+            if (bag == null) return "⚠ 背包存档未就绪";
+            SyncBagFromRuntime(bag);   // 先把运行时新捡的种子收编进树
+            var sd = gse.AllSeedSaveData;
+            if (sd == null) return "⚠ 种子存档未就绪";
+            var items = bag.ItemDataList;
+            if (items == null) return "⚠ ItemDataList 为空";
+
+            int checkedCount = 0, repaired = 0, failed = 0;
+            for (int i = 0; i < items.Count; i++)
+            {
+                var it = items[i];
+                if (it == null || !PiperNames.ItemName(it.ConfigId).Contains("种子")) continue;
+                checkedCount++;
+                if (SeedLinkOk(sd, it)) continue;
+                if (EnsureSeedLink(it, it.ConfigId)) repaired++;
+                else failed++;
+            }
+
+            if (repaired > 0)
+            {
+                try { sd.Load(); } catch { }
+                try { bag.Load(); } catch { }
+                try { bag.Save(); } catch { }
+                items = gse.BagSaveData == null ? null : gse.BagSaveData.ItemDataList;   // Save 后列表会重建
+                sd = gse.AllSeedSaveData;
+            }
+
+            int still = 0;
+            if (items != null)
+                for (int i = 0; i < items.Count; i++)
+                {
+                    var it = items[i];
+                    if (it == null || !PiperNames.ItemName(it.ConfigId).Contains("种子")) continue;
+                    if (!SeedLinkOk(sd, it)) still++;
+                }
+
+            RawLog($"RepairSeedLinks checked={checkedCount} repaired={repaired} failed={failed} still={still}");
+            string msg = checkedCount == 0
+                ? "背包里没有种子"
+                : $"检查 {checkedCount} 个种子：补建/修正 {repaired} 个"
+                  + (failed > 0 ? $"，失败 {failed}" : "")
+                  + (still > 0 ? $"，仍有 {still} 个未关联" : "，全部正常");
+            Toast(msg);
+            return "✔ " + msg;
+        }
+        catch (Exception e) { return "✘ " + e.Message; }
+    }
+
+    private static void RemoveLastSeed(string kind)
+    {
         try
         {
             if (string.IsNullOrEmpty(kind)) return;
@@ -1314,6 +1420,34 @@ public static class PiperBridge
             }
         }
         catch (Exception e) { RawLog("SELFTEST COUNT err " + e.Message); }
+
+        // 5) 种子关联修复自测：故意删一条记录+清 SeedLogicID，再让 RepairSeedLinks 补回
+        try
+        {
+            var bag = gse.BagSaveData;
+            var sd = gse.AllSeedSaveData;
+            SaveLoadSystem.ItemData target = null;
+            var items = bag == null ? null : bag.ItemDataList;
+            if (items != null) for (int i = 0; i < items.Count; i++)
+                {
+                    var it = items[i];
+                    if (it != null && it.SeedLogicID > 0 && PiperNames.ItemName(it.ConfigId).Contains("种子")) { target = it; break; }
+                }
+            if (target != null)
+            {
+                int cfg = target.ConfigId, logic = target.ItemLogicID, oldSeed = target.SeedLogicID;
+                int removed = RemoveSeedRecordByLogic(sd, oldSeed);
+                target.SeedLogicID = 0;
+                try { sd.Load(); } catch { }
+                try { bag.Load(); } catch { }
+                string rr = RepairSeedLinks();
+                var chk = FindByLogic(gse.BagSaveData, logic);
+                bool ok = SeedLinkOk(gse.AllSeedSaveData, chk);
+                RawLog($"SELFTEST SEEDREPAIR cfg={cfg} oldSeed={oldSeed} removed={removed} ok={ok} result='{rr}'");
+            }
+            else RawLog("SELFTEST SEEDREPAIR 未找到可测种子");
+        }
+        catch (Exception e) { RawLog("SELFTEST SEEDREPAIR err " + e.Message); }
 
         RunBagSyncSelfTest(gse);
         RawLog("===== SELFTEST 结束 =====");
